@@ -29,17 +29,16 @@ class ProxyServerTest:
         except:
             print('[*' + self.getTime() + ']: ' + f"No {type} proxiy can be used")
             exit()
-        # return ['10.162.89.147', 8000]
         return proxy
 
     # 非阻塞获取socket的返回值
-    def socketReadHelper(self, socket):
-        socket.setblocking(False)
+    def socketReadHelper(self, mysocket):
+        mysocket.setblocking(False)
         try:
-            data = socket.recv(8192)
+            data = mysocket.recv(8192)
         except:
             data = b""
-        socket.setblocking(True)
+        mysocket.setblocking(True)
         return data
 
     def isFirstPartResponse(self, reponse):
@@ -60,6 +59,20 @@ class ProxyServerTest:
             return True
         else:
             return False
+    
+    def isSocketStillConnected(self, sock: socket.socket) -> bool:
+        try:
+            # this will try to read bytes without blocking and also without removing them from buffer (peek only)
+            data = sock.recv(16, socket.MSG_DONTWAIT | socket.MSG_PEEK)
+            if len(data) == 0:
+                return False
+        except BlockingIOError:
+            return True  # socket is open and reading from it would block
+        except ConnectionResetError:
+            return False  # socket was closed for some other reason
+        except Exception as e:
+            return True
+        return True
 
     def getTime(self):
         return time.asctime(time.localtime(time.time()))
@@ -82,6 +95,11 @@ class ProxyServerTest:
                 data = client.recv(8192)
                 if not data:
                     break
+                if type == "https":
+                    # 测试的时候发现python多线程使用https代理requests的时候会先发一个缺少/r/n的报文，后再补发一个/r/n，这里进行一下修复
+                    if data[-4:]!=b'\r\n\r\n':
+                        tail = client.recv(8192)
+                        data = data+tail
                 print('[*' + self.getTime() + ']: Accept data from client...')
             except error as e:
                 print('[*' + self.getTime() + ']: ' + "Local receiving client : " + str(e))
@@ -94,7 +112,7 @@ class ProxyServerTest:
                 print('[*' + self.getTime() + ']: ' + "Now proxy ip:" + str(proxyip))
                 prip = proxyip[0]
                 prpo = proxyip[1]
-                try:
+                try:  
                     mbsocket.settimeout(3)
                     mbsocket.connect((prip, prpo))
                     mbsocket.send(data)
@@ -130,7 +148,10 @@ class ProxyServerTest:
             
                 if type == "https":
                     # 如果是https，要建立起隧道、进行TLS的交互，再之后才能发送和接受数据
-                    print(data_1)
+                    if b'200' not in data_1:
+                        print('[*' + self.getTime() + ']: ' + "Fail to establish Https tunnel")
+                        print('[*' + self.getTime() + ']: ' + "Use other proxy to RE_Connect...")
+                        continue
                     print('[*' + self.getTime() + ']: ' + "Https tunnel established")
                     client.send(data_1)
                     TLSMessageC = b""
@@ -148,9 +169,9 @@ class ProxyServerTest:
                         except:
                             print('[*' + self.getTime() + ']: ' + 'Something wrong in communicating through https tunnel...')
                             break
-
+                        
                         # 获取TLS报文的类型，看是否是分手报文（TLS报文的第一个字节标识了TLS报文的类型）
-                        if (len(TLSMessageC) >=1 and TLSMessageC[0]==21) or (len(TLSMessageS) >=1 and TLSMessageS[0]==21):
+                        if (len(TLSMessageC) >=1 and TLSMessageC[0]==21) or (len(TLSMessageS) >=1 and TLSMessageS[0]==21) or not self.isSocketStillConnected(client) or not self.isSocketStillConnected(mbsocket):
                             break
 
                 print('[*' + self.getTime() + ']: ' + "One proxy over")
